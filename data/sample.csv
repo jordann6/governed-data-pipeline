@@ -1,0 +1,9 @@
+study_id,site_id,subject_id,visit,measurement,value,unit,recorded_at
+ST-1001,SITE-01,SUBJ-0001,baseline,systolic_bp,128,mmHg,2026-09-01T08:15:00Z
+ST-1001,SITE-01,SUBJ-0001,week4,systolic_bp,122,mmHg,2026-09-08T08:20:00Z
+ST-1001,SITE-02,SUBJ-0002,baseline,systolic_bp,141,mmHg,2026-09-01T09:05:00Z
+ST-1001,SITE-02,SUBJ-0002,week4,systolic_bp,133,mmHg,2026-09-08T09:10:00Z
+ST-1002,SITE-03,SUBJ-0003,baseline,hba1c,7.4,percent,2026-09-02T10:30:00Z
+ST-1002,SITE-03,SUBJ-0003,week12,hba1c,6.9,percent,2026-09-09T10:45:00Z
+ST-1002,SITE-01,SUBJ-0004,baseline,hba1c,8.1,percent,2026-09-02T11:00:00Z
+ST-1002,SITE-01,SUBJ-0004,week12,hba1c,7.6,percent,2026-09-09T11:15:00Z
