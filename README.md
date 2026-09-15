@@ -56,7 +56,7 @@ This is a reference lab, not a certified system, but each control is the concret
 | Control | How it is implemented | What it satisfies |
 |---|---|---|
 | Attribution | `default_tags` on the provider; the gate rejects any untagged resource | SOC 2 accountability, FinOps ownership |
-| Cost ceiling | `glue_max_dpus = 2`; the gate rejects an oversized job | operational discipline, spend control |
+| Cost ceiling | per-tier Glue DPU cap (2 by default, tighter for prod); the gate rejects an oversized job | operational discipline, spend control |
 | Encryption at rest | one CMK, SSE-KMS on every zone, rotation enabled | SOC 2 CC6.1, ISO 27001 cryptography, "AES 256 encryption at rest" |
 | Encryption in transit | `DenyInsecureTransport` on every bucket | SOC 2 CC6.7, TLS 1.2 minimum |
 | No public data | public-access-block, all four settings, on every zone | SOC 2 CC6, data confidentiality |
@@ -68,7 +68,7 @@ The point of the last row is that the same gate that stops a surprise bill also 
 
 ## Enforcement, and how to see it
 
-The gate runs twice: once locally before you push, once in CI on the pull request. It reads the Terraform plan as JSON and checks four things, tags, DPU ceiling, encryption on every bucket, and no public access. `policy/tags.rego` holds the rules.
+The gate runs twice: once locally before you push, once in CI on the pull request. It reads the Terraform plan as JSON and checks tags, a per-tier Glue DPU ceiling, encryption on every bucket, no public access, and a prod-only evidence-retention floor. `policy/tags.rego` holds the rules.
 
 To watch it fail on purpose, bump the Glue job past 2 DPUs, remove an encryption block, or flip a public-access flag, then run `make gate`. The plan is rejected before a dollar is spent or a bucket is exposed.
 
@@ -88,15 +88,20 @@ make verify     # prove TLS-only and least privilege in the live account
 make destroy    # sweep the Object-Locked evidence zone, then terraform destroy
 ```
 
+These run against the `sandbox` tier by default; pass `ENV=dev|test|prod` to target another (see Environments below).
+
 Prerequisites: AWS credentials (region defaults to `us-east-1`), Terraform, the AWS CLI, `conftest`, `python3` with `boto3` for the teardown sweep, and `curl`. The caller must be able to assume the restricted-reader role, which any account admin can. `infracost` is optional; the gate skips it cleanly if it is not installed.
 
-## Environments (dev / test / prod)
+## Environments (sandbox / dev / test / prod)
 
-The pipeline is one reusable module, so dev, test, and prod are the same module
-promoted per tier, not three copies. Each environment gets its own Terraform
-workspace (separate state, real isolation) and its own var-file under
-`terraform/envs/`, and the environment name is baked into every resource name so
-tiers never collide even in a single account.
+The pipeline is one reusable module, so every tier is the same module promoted
+per tier, not a copy. Each tier gets its own Terraform workspace (separate state,
+real isolation) and its own var-file under `terraform/envs/`, and the environment
+name is baked into every resource name so tiers never collide even in a single
+account. In a real Veeva-style layout each tier is a separate AWS account and the
+account id already disambiguates.
+
+Every `make` target takes an `ENV`, which defaults to `sandbox`:
 
 ```bash
 make gate ENV=dev      # plan + policy check against the dev tier
@@ -109,9 +114,7 @@ tier. dev allows a higher Glue DPU ceiling for experimentation; test and prod
 are capped tighter; and prod, as a validated environment, additionally requires
 the Object-Lock evidence retention to clear an audit floor. So the same gate that
 blocks the accidental $15k job also enforces stricter change-control on prod than
-on dev, which is exactly what a GxP / SOC 2 shop needs. Leaving `ENV` unset keeps
-the default workspace and the sandbox defaults, so nothing here changes existing
-behavior.
+on dev, which is exactly what a GxP / SOC 2 shop needs.
 
 ## Cost
 
@@ -127,7 +130,7 @@ Everything is serverless or local, and nothing is always-on. Left running for a 
 
 ```
 terraform/                 provider default_tags, the module call, outputs
-  envs/{dev,test,prod}.tfvars  per-tier variables promoted through workspaces
+  envs/{sandbox,dev,test,prod}.tfvars  per-tier variables promoted through workspaces
   modules/pipeline/        the reusable module: KMS, S3 zones, hardening,
                            IAM, evidence zone, Glue job, Athena database
 glue/transform_job.py      PySpark: raw CSV to curated Parquet

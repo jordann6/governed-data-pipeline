@@ -4,21 +4,19 @@ SHELL := /bin/bash
 TF := terraform -chdir=terraform
 PY := python3
 
-# ENV selects the environment. Unset (or `default`) = the live sandbox in the
-# default workspace, unchanged. dev/test/prod each get their own Terraform
-# workspace (separate state = real isolation) and their own -var-file, so the
-# same module is promoted per tier instead of copied.
-ENV ?= default
-VAR_FILE := $(if $(filter default,$(ENV)),,-var-file=envs/$(ENV).tfvars)
+# ENV selects the tier (sandbox, dev, test, prod). Each tier is the SAME module
+# in its own Terraform workspace (separate state = real isolation) with its own
+# -var-file, so it is promoted per tier instead of copied. Defaults to sandbox,
+# the base/demo tier this lab runs in.
+ENV ?= sandbox
+VAR_FILE := -var-file=envs/$(ENV).tfvars
 
 init:
 	$(TF) init
 
-# Select the workspace for ENV, creating it on first use. default is left as-is
-# so the currently-deployed sandbox is never disturbed.
+# Select the workspace for ENV, creating it on first use.
 ws:
-	@if [ "$(ENV)" = "default" ]; then $(TF) workspace select default; \
-	 else $(TF) workspace select -or-create $(ENV); fi
+	$(TF) workspace select -or-create $(ENV)
 
 plan: ws
 	$(TF) plan $(VAR_FILE) -out=tfplan
