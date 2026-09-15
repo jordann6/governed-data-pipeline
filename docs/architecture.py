@@ -14,6 +14,7 @@ from diagrams import Diagram, Cluster, Edge
 from diagrams.aws.storage import S3
 from diagrams.aws.analytics import Glue, Athena
 from diagrams.aws.security import KMS, IAM
+from diagrams.aws.management import Organizations
 from diagrams.onprem.iac import Terraform
 from diagrams.onprem.ci import GithubActions
 from diagrams.onprem.workflow import Airflow
@@ -41,10 +42,12 @@ with Diagram(
     # --- Control plane: the gate runs before anything applies ---
     with Cluster("CI policy gate  (runs before apply, blocks non-compliant plans)"):
         tf = Terraform("Terraform\nmodule call")
-        gate = GithubActions("OPA / conftest\ntags, DPU cap,\nencryption, no public")
+        gate = GithubActions("OPA / conftest\ntags, per-tier DPU cap,\nencryption, no public,\nprod retention floor")
         evidence = S3("S3 evidence zone\nObject Lock + versioned")
+        tiers = Organizations("per tier:\nsandbox / dev / test / prod\n(workspace or account)")
         tf >> Edge(label="plan (json)") >> gate
         gate >> Edge(label="apply +\ncapture plan", style="bold") >> evidence
+        gate >> Edge(label="promoted\nper tier", style="dashed", color="darkblue") >> tiers
 
     # --- Governance primitives ---
     kms = KMS("KMS CMK\nrotation on")
@@ -52,7 +55,7 @@ with Diagram(
     airflow = Airflow("Airflow DAG\ntrigger")
 
     # --- Data plane ---
-    with Cluster("Governed pipeline  (us-east-1)"):
+    with Cluster("Governed pipeline  (one module, promoted per tier; us-east-1)"):
         raw = S3("S3 raw")
         glue = Glue("Glue PySpark\ncapped at 2 DPUs")
         curated = S3("S3 curated\n(Parquet)")
