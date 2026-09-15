@@ -6,15 +6,43 @@ import rego.v1
 
 required_tags := {"project", "environment", "owner", "cost_center"}
 
-max_glue_dpus := 2
+# Per-tier Glue DPU ceilings. The SAME gate scales its strictness by environment:
+# dev gets room to experiment, test and prod are locked down. Unknown envs get
+# the conservative default. This is how "steps that can't be skipped" becomes
+# tier-aware instead of one-size-fits-all.
+env_dpu_cap := {"dev": 4, "test": 2, "prod": 2, "sandbox": 2}
 
-# Deny any Glue job larger than the cap. This is how you stop the 100-DPU accident.
+default_dpu_cap := 2
+
+# Deny any Glue job larger than the cap for ITS environment. This is how you stop
+# the 100-DPU accident, tightened per tier.
 deny contains msg if {
 	rc := input.resource_changes[_]
 	rc.type == "aws_glue_job"
+	env := object.get(rc.change.after.tags_all, "environment", "sandbox")
+	cap := object.get(env_dpu_cap, env, default_dpu_cap)
 	capacity := rc.change.after.max_capacity
-	capacity > max_glue_dpus
-	msg := sprintf("Glue job '%s' requests %v DPUs, over the cap of %v", [rc.name, capacity, max_glue_dpus])
+	capacity > cap
+	msg := sprintf("Glue job '%s' (env=%s) requests %v DPUs, over the %s cap of %v", [rc.name, env, capacity, env, cap])
+}
+
+# prod is a validated environment: its change-control evidence must be retained
+# long enough to satisfy an audit. If any resource in this plan is tagged prod,
+# the Object-Lock evidence retention must be at least this floor.
+prod_min_evidence_days := 30
+
+is_prod if {
+	some rc in input.resource_changes
+	object.get(rc.change.after, "tags_all", {}).environment == "prod"
+}
+
+deny contains msg if {
+	is_prod
+	rc := input.resource_changes[_]
+	rc.type == "aws_s3_bucket_object_lock_configuration"
+	days := rc.change.after.rule[_].default_retention[_].days
+	days < prod_min_evidence_days
+	msg := sprintf("prod evidence retention is %v days; validated environments require at least %v", [days, prod_min_evidence_days])
 }
 
 # Deny taggable resources missing a required tag. Checks tags_all (default_tags merged in).

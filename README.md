@@ -90,7 +90,36 @@ make destroy    # sweep the Object-Locked evidence zone, then terraform destroy
 
 Prerequisites: AWS credentials (region defaults to `us-east-1`), Terraform, the AWS CLI, `conftest`, `python3` with `boto3` for the teardown sweep, and `curl`. The caller must be able to assume the restricted-reader role, which any account admin can. `infracost` is optional; the gate skips it cleanly if it is not installed.
 
+## Environments (dev / test / prod)
+
+The pipeline is one reusable module, so dev, test, and prod are the same module
+promoted per tier, not three copies. Each environment gets its own Terraform
+workspace (separate state, real isolation) and its own var-file under
+`terraform/envs/`, and the environment name is baked into every resource name so
+tiers never collide even in a single account.
+
+```bash
+make gate ENV=dev      # plan + policy check against the dev tier
+make deploy ENV=prod   # apply the prod tier into its own workspace
+make destroy ENV=test  # tear down just the test tier
+```
+
+The policy gate is tier-aware: it reads the `environment` tag and tightens by
+tier. dev allows a higher Glue DPU ceiling for experimentation; test and prod
+are capped tighter; and prod, as a validated environment, additionally requires
+the Object-Lock evidence retention to clear an audit floor. So the same gate that
+blocks the accidental $15k job also enforces stricter change-control on prod than
+on dev, which is exactly what a GxP / SOC 2 shop needs. Leaving `ENV` unset keeps
+the default workspace and the sandbox defaults, so nothing here changes existing
+behavior.
+
 ## Cost
+
+Multi-environment structure (the var-files, workspaces, and tier-aware gate) adds
+no cost on its own; billing starts only when you `terraform apply` a given
+environment. The one standing charge per live environment is its KMS key, about a
+dollar a month, so three environments running at once is a few dollars a month
+idle. You do not need them all live at once to prove the pattern.
 
 Everything is serverless or local, and nothing is always-on. Left running for a full week the bill stays well under a dollar. S3 storage is pennies, the Glue job is a few cents per run at 2 DPUs, Athena is cents per query, and the Airflow DAG runs locally for free. The only standing charge is the KMS key at about a dollar a month. Athena instead of a Redshift cluster and local Airflow instead of MWAA (which would be roughly $350 a month for the same DAG) are deliberate choices: the idle cost was engineered down, not left to chance.
 
@@ -98,6 +127,7 @@ Everything is serverless or local, and nothing is always-on. Left running for a 
 
 ```
 terraform/                 provider default_tags, the module call, outputs
+  envs/{dev,test,prod}.tfvars  per-tier variables promoted through workspaces
   modules/pipeline/        the reusable module: KMS, S3 zones, hardening,
                            IAM, evidence zone, Glue job, Athena database
 glue/transform_job.py      PySpark: raw CSV to curated Parquet

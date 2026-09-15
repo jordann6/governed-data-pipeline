@@ -1,16 +1,21 @@
 data "aws_caller_identity" "current" {}
 
 locals {
+  # Environment is baked into the name so dev/test/prod are fully isolated even
+  # in a single account: vpl-prod-demo-raw-<acct> never collides with
+  # vpl-dev-demo-raw-<acct>. In a real multi-account layout the account_id suffix
+  # already disambiguates, and this prefix keeps names self-documenting.
+  prefix        = "vpl-${var.environment}-${var.name}"
   suffix        = data.aws_caller_identity.current.account_id
-  evidence_name = "vpl-${var.name}-evidence-${local.suffix}"
+  evidence_name = "${local.prefix}-evidence-${local.suffix}"
 
   # The three data-plane zones. for_each so encryption, public-access-block,
   # and the TLS-only policy are applied identically to every one of them.
   # Adding a zone later inherits all the controls for free.
   data_buckets = {
-    raw     = "vpl-${var.name}-raw-${local.suffix}"
-    curated = "vpl-${var.name}-curated-${local.suffix}"
-    scripts = "vpl-${var.name}-scripts-${local.suffix}"
+    raw     = "${local.prefix}-raw-${local.suffix}"
+    curated = "${local.prefix}-curated-${local.suffix}"
+    scripts = "${local.prefix}-scripts-${local.suffix}"
   }
 }
 
@@ -18,13 +23,13 @@ locals {
 # Veeva Trust page: "AES 256 encryption ... at rest". A CMK (not the AWS-managed
 # default) means the key policy is ours to control and rotation is on.
 resource "aws_kms_key" "data" {
-  description             = "vpl-${var.name} data-at-rest encryption"
+  description             = "${local.prefix} data-at-rest encryption"
   deletion_window_in_days = 7
   enable_key_rotation     = true
 }
 
 resource "aws_kms_alias" "data" {
-  name          = "alias/vpl-${var.name}-data"
+  name          = "alias/${local.prefix}-data"
   target_key_id = aws_kms_key.data.key_id
 }
 
@@ -151,7 +156,7 @@ resource "aws_s3_bucket_policy" "evidence" {
 
 # --- Least-privilege IAM for the Glue job -------------------------------------
 resource "aws_iam_role" "glue" {
-  name = "vpl-${var.name}-glue-role"
+  name = "${local.prefix}-glue-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -163,7 +168,7 @@ resource "aws_iam_role" "glue" {
 }
 
 resource "aws_iam_role_policy" "glue" {
-  name = "vpl-${var.name}-glue-policy"
+  name = "${local.prefix}-glue-policy"
   role = aws_iam_role.glue.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -196,7 +201,7 @@ resource "aws_iam_role_policy" "glue" {
 # "least privileged access ... enforced through automated means" - demonstrated,
 # not asserted.
 resource "aws_iam_role" "restricted_reader" {
-  name = "vpl-${var.name}-restricted-reader"
+  name = "${local.prefix}-restricted-reader"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -235,7 +240,7 @@ resource "aws_iam_role_policy" "restricted_reader" {
 # --- Glue transform job -------------------------------------------------------
 # max_capacity is the guardrail the policy gate reads. Capped by var.glue_max_dpus.
 resource "aws_glue_job" "transform" {
-  name         = "vpl-${var.name}-transform"
+  name         = "${local.prefix}-transform"
   role_arn     = aws_iam_role.glue.arn
   glue_version = "4.0"
   max_capacity = var.glue_max_dpus
@@ -254,6 +259,6 @@ resource "aws_glue_job" "transform" {
 
 # --- Athena query layer (stands in for Redshift, near zero cost) --------------
 resource "aws_athena_database" "curated" {
-  name   = "vpl_${var.name}_curated"
+  name   = "vpl_${var.environment}_${var.name}_curated"
   bucket = aws_s3_bucket.data["curated"].id
 }

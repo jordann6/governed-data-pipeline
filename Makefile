@@ -1,14 +1,27 @@
 SHELL := /bin/bash
-.PHONY: init plan gate deploy demo verify evidence destroy
+.PHONY: init ws plan gate deploy demo verify evidence destroy
 
 TF := terraform -chdir=terraform
 PY := python3
 
+# ENV selects the environment. Unset (or `default`) = the live sandbox in the
+# default workspace, unchanged. dev/test/prod each get their own Terraform
+# workspace (separate state = real isolation) and their own -var-file, so the
+# same module is promoted per tier instead of copied.
+ENV ?= default
+VAR_FILE := $(if $(filter default,$(ENV)),,-var-file=envs/$(ENV).tfvars)
+
 init:
 	$(TF) init
 
-plan:
-	$(TF) plan -out=tfplan
+# Select the workspace for ENV, creating it on first use. default is left as-is
+# so the currently-deployed sandbox is never disturbed.
+ws:
+	@if [ "$(ENV)" = "default" ]; then $(TF) workspace select default; \
+	 else $(TF) workspace select -or-create $(ENV); fi
+
+plan: ws
+	$(TF) plan $(VAR_FILE) -out=tfplan
 	$(TF) show -json tfplan > tfplan.json
 
 # Local mirror of the CI gate. Same rules block cost (DPU cap, tags) AND security
@@ -17,20 +30,20 @@ gate: plan
 	infracost breakdown --path terraform || true
 	conftest test tfplan.json --policy policy || (echo "POLICY GATE FAILED"; exit 1)
 
-deploy:
+deploy: ws
 	$(TF) apply tfplan
-	@$(MAKE) evidence
+	@$(MAKE) evidence ENV=$(ENV)
 
 # Capture the applied plan into the Object-Locked evidence zone. Every deploy
 # leaves a tamper-evident record: the GxP / SOC 2 change-control beat.
-evidence:
+evidence: ws
 	@EVID=$$($(TF) output -raw evidence_bucket); \
 	 TS=$$(date -u +%Y%m%dT%H%M%SZ); \
 	 aws s3 cp tfplan.json s3://$$EVID/evidence/$$TS-tfplan.json >/dev/null; \
 	 echo "captured plan evidence -> s3://$$EVID/evidence/$$TS-tfplan.json (object-locked, versioned)"
 
 # Uploads sample data and runs the Glue job. RAW/JOB come from terraform outputs.
-demo:
+demo: ws
 	@RAW=$$($(TF) output -raw raw_bucket); \
 	 JOB=$$($(TF) output -raw glue_job_name); \
 	 aws s3 cp data/sample.csv s3://$$RAW/incoming/sample.csv; \
@@ -41,7 +54,7 @@ demo:
 # Proof 1: a plain-HTTP request to a zone is denied (TLS-only, 403).
 # Proof 2: the restricted-reader role CAN read raw (positive control) but is
 #          DENIED on curated (least privilege enforced through automated means).
-verify:
+verify: ws
 	@set -euo pipefail; \
 	 RAW=$$($(TF) output -raw raw_bucket); \
 	 CURATED=$$($(TF) output -raw curated_bucket); \
@@ -67,7 +80,7 @@ verify:
 	   echo "  FAIL: reader read curated, least privilege NOT enforced"; exit 1; \
 	 else echo "  PASS: reader DENIED on curated (AccessDenied)"; fi
 
-destroy:
+destroy: ws
 	$(PY) scripts/purge_evidence.py $$($(TF) output -raw evidence_bucket 2>/dev/null) || true
-	$(TF) destroy
+	$(TF) destroy $(VAR_FILE)
 	@echo "Confirm no lingering S3 objects, Glue jobs, or Athena results before you walk away."

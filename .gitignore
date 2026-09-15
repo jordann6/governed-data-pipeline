@@ -9,6 +9,9 @@ crash.log
 crash.*.log
 *.tfvars
 *.tfvars.json
+# ...but the per-environment tfvars ARE the promotion structure and hold no
+# secrets (env name, cost_center, DPU cap, retention), so track them.
+!terraform/envs/*.tfvars
 override.tf
 override.tf.json
 *_override.tf
