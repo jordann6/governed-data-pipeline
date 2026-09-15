@@ -21,11 +21,13 @@ from diagrams.onprem.workflow import Airflow
 graph_attr = {
     "fontsize": "16",
     "labelloc": "t",
-    "pad": "0.6",
-    "nodesep": "0.7",
-    "ranksep": "0.9",
+    "pad": "0.8",
+    "nodesep": "0.9",
+    "ranksep": "1.4",
+    "splines": "spline",
     "bgcolor": "white",
 }
+edge_attr = {"fontsize": "13"}
 
 with Diagram(
     "Governed data pipeline",
@@ -34,20 +36,22 @@ with Diagram(
     show=False,
     direction="LR",
     graph_attr=graph_attr,
+    edge_attr=edge_attr,
 ):
     # --- Control plane: the gate runs before anything applies ---
     with Cluster("CI policy gate  (runs before apply, blocks non-compliant plans)"):
         tf = Terraform("Terraform\nmodule call")
         gate = GithubActions("OPA / conftest\ntags, DPU cap,\nencryption, no public")
+        evidence = S3("S3 evidence zone\nObject Lock + versioned")
         tf >> Edge(label="plan (json)") >> gate
+        gate >> Edge(label="apply +\ncapture plan", style="bold") >> evidence
 
     # --- Governance primitives ---
-    kms = KMS("KMS CMK\nrotation on\nSSE-KMS every zone")
+    kms = KMS("KMS CMK\nrotation on")
     reader = IAM("restricted-reader\nleast-privilege proof")
-
-    # --- Data plane ---
     airflow = Airflow("Airflow DAG\ntrigger")
 
+    # --- Data plane ---
     with Cluster("Governed pipeline  (us-east-1)"):
         raw = S3("S3 raw")
         glue = Glue("Glue PySpark\ncapped at 2 DPUs")
@@ -55,11 +59,10 @@ with Diagram(
         athena = Athena("Athena\n(Redshift stand-in)")
         raw >> glue >> curated >> athena
 
-    evidence = S3("S3 evidence zone\nObject Lock + versioned")
-
-    # --- Wiring ---
-    gate >> Edge(label="apply + capture plan", style="bold") >> evidence
-    airflow >> Edge(label="starts job") >> glue
-    kms >> Edge(style="dashed", color="darkgreen") >> [raw, curated, evidence]
-    reader >> Edge(label="allowed", color="darkgreen") >> raw
-    reader >> Edge(label="DENIED (IAM)", color="firebrick", style="bold") >> curated
+    # --- Wiring (governance edges unconstrained so they route cleanly) ---
+    kms >> Edge(label="SSE-KMS\nevery zone", style="dashed", color="darkgreen",
+                constraint="false") >> raw
+    airflow >> Edge(label="starts job", constraint="false") >> glue
+    reader >> Edge(label="allowed", color="darkgreen", constraint="false") >> raw
+    reader >> Edge(label="DENIED (IAM)", color="firebrick", style="bold",
+                   constraint="false") >> curated
