@@ -27,6 +27,10 @@ The transform itself is deliberately small: read raw CSV, drop empty rows, add a
 
 ## Architecture
 
+![Architecture: S3 to Glue to Athena with a KMS key, an Airflow trigger, an Object-Locked evidence zone, and a CI policy gate that blocks non-compliant plans before apply](docs/architecture.png)
+
+The diagram is generated from code (`docs/architecture.py`, official AWS icons via the `diagrams` library) so it stays in sync with the module. Text fallback:
+
 ```
    sample data
        |
