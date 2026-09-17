@@ -5,3 +5,4 @@ environment             = "dev"
 cost_center             = "platform-lab-dev"
 glue_max_dpus           = 4
 evidence_retention_days = 1
+monthly_budget          = 50

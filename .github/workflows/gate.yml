@@ -1,0 +1,97 @@
+# The paved road's CI half: the step that cannot be skipped.
+#
+# This workflow is BOTH:
+#   - a pull_request gate on this repo, and
+#   - a reusable workflow (workflow_call) that any consuming repo inherits, so a
+#     team calling the module gets the exact same policy gate without copying it:
+#
+#       # in a consuming repo, .github/workflows/ci.yml
+#       jobs:
+#         governance:
+#           uses: jordann6/governed-data-pipeline/.github/workflows/gate.yml@v1
+#           secrets: inherit
+#
+# That is how "everyone uses the recommended pipeline" is enforced in CI: the
+# guardrails ride WITH the module instead of being re-implemented (or skipped) per
+# team. Pair this with branch protection requiring the "governance" check, and the
+# gate becomes un-mergeable-around.
+name: governance-gate
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - "policy/**"
+      - ".github/workflows/gate.yml"
+  workflow_call:
+    inputs:
+      env:
+        description: "Tier to gate against (sandbox|dev|test|prod). Sets the budget cap."
+        type: string
+        default: "sandbox"
+    secrets:
+      INFRACOST_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write # required so Infracost can post/update the cost comment
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    env:
+      ENV: ${{ inputs.env || 'sandbox' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Setup conftest
+        run: |
+          CONFTEST_VERSION=0.56.0
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin conftest
+
+      - name: Terraform plan (JSON)
+        working-directory: terraform
+        run: |
+          terraform init -input=false
+          terraform workspace select -or-create "$ENV"
+          terraform plan -input=false -var-file="envs/$ENV.tfvars" -out=tfplan
+          terraform show -json tfplan > ../tfplan.json
+
+      # --- FinOps feedback loop: make cost VISIBLE at the moment of decision ----
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Infracost breakdown
+        run: |
+          infracost breakdown --path terraform \
+            --format json --out-file infracost.json
+
+      # Posts the monthly-cost DIFF as a comment on the PR, so every reviewer sees
+      # "+$14/mo" before merge. This is the "mindful" half: cost becomes a review
+      # criterion, not an after-the-fact surprise.
+      - name: Post Infracost comment
+        if: github.event_name == 'pull_request'
+        run: |
+          infracost comment github --path infracost.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --pull-request "${{ github.event.pull_request.number }}" \
+            --github-token "${{ github.token }}" \
+            --behavior update
+
+      # --- The blocking gate: security + tags + DPU cap, AND the dollar budget ---
+      - name: Policy gate (security, tags, DPU cap)
+        run: conftest test tfplan.json --policy policy
+
+      - name: Budget gate (per-tier dollar ceiling)
+        run: |
+          echo "{\"env\":\"$ENV\"}" > budget_env.json
+          conftest test infracost.json --policy policy --data budget_env.json

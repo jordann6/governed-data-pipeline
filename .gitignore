@@ -19,6 +19,10 @@ override.tf.json
 .terraformrc
 terraform.rc
 
+# Cost gate artifacts (regenerated every `make gate`)
+infracost.json
+budget_env.json
+
 # OS / editor
 .DS_Store
 *.swp

@@ -5,3 +5,4 @@ environment             = "sandbox"
 cost_center             = "platform-lab-sandbox"
 glue_max_dpus           = 2
 evidence_retention_days = 1
+monthly_budget          = 10

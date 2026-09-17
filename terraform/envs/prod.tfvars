@@ -7,3 +7,6 @@ environment             = "prod"
 cost_center             = "platform-lab-prod"
 glue_max_dpus           = 2
 evidence_retention_days = 30
+# Tightest budget: prod is validated, so any spend surprise is the one that
+# matters most. The tripwire fires earliest here, same logic as the DPU cap.
+monthly_budget = 15

@@ -76,3 +76,31 @@ deny contains msg if {
 	rc.change.after[flag] != true
 	msg := sprintf("Public-access-block '%s' has %s != true; data zones must never be publicly reachable", [rc.address, flag])
 }
+
+# --- FinOps budget gate: turn Infracost from a display into a control ----------
+# The DPU cap above bounds one resource's SIZE. This bounds the whole plan's
+# DOLLARS. `make gate` runs `infracost breakdown --format json`, so this rule
+# fires on the Infracost document (input.projects), NOT on the Terraform plan,
+# and the two rule sets stay cleanly separated: plan rules see no input.projects,
+# this rule sees no input.resource_changes.
+#
+# Per-tier budgets, same tier-aware idea as env_dpu_cap: dev has room to
+# experiment, prod is the tightest tripwire. The tier is passed in at gate time
+# via `--data` as data.env; an unknown tier gets the conservative default.
+env_budget := {"dev": 50, "test": 25, "prod": 15, "sandbox": 10}
+
+default_budget := 10
+
+# The tier is injected at gate time via `--data` (data.env). Default to the
+# conservative sandbox tier if it was not supplied.
+default gate_env := "sandbox"
+
+gate_env := data.env
+
+deny contains msg if {
+	some project in input.projects
+	cost := to_number(project.breakdown.totalMonthlyCost)
+	cap := object.get(env_budget, gate_env, default_budget)
+	cost > cap
+	msg := sprintf("estimated monthly cost $%.2f (env=%s) exceeds the $%v budget for this tier", [cost, gate_env, cap])
+}

@@ -31,3 +31,24 @@ variable "evidence_retention_days" {
   type    = number
   default = 1
 }
+
+# FinOps: per-tier budget the AWS Budget alerts on and the Infracost gate checks
+# against. Same tier-aware idea as glue_max_dpus, dev loose, prod tight.
+variable "monthly_budget" {
+  type    = number
+  default = 10
+}
+
+variable "finops_alert_email" {
+  type        = string
+  description = "Where Budgets and Cost Anomaly Detection alerts are sent."
+  default     = "jordandn6@outlook.com"
+}
+
+# Adoption backstop: stand up the AWS Config recorder + REQUIRED_TAGS rule that
+# catches resources built outside the module. Off by default (account-global, adds
+# cost); enable in one governance account to prove the org-level control.
+variable "enable_config_guardrail" {
+  type    = bool
+  default = false
+}

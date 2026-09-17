@@ -14,7 +14,9 @@ from diagrams import Diagram, Cluster, Edge
 from diagrams.aws.storage import S3
 from diagrams.aws.analytics import Glue, Athena
 from diagrams.aws.security import KMS, IAM
-from diagrams.aws.management import Organizations
+from diagrams.aws.management import Organizations, Config
+from diagrams.aws.cost import Budgets, CostExplorer
+from diagrams.aws.general import General
 from diagrams.onprem.iac import Terraform
 from diagrams.onprem.ci import GithubActions
 from diagrams.onprem.workflow import Airflow
@@ -42,10 +44,12 @@ with Diagram(
     # --- Control plane: the gate runs before anything applies ---
     with Cluster("CI policy gate  (runs before apply, blocks non-compliant plans)"):
         tf = Terraform("Terraform\nmodule call")
-        gate = GithubActions("OPA / conftest\ntags, per-tier DPU cap,\nencryption, no public,\nprod retention floor")
+        infracost = GithubActions("Infracost\nPR cost comment\n+ per-tier $ budget gate")
+        gate = GithubActions("OPA / conftest\ntags, per-tier DPU cap,\nper-tier $ budget,\nencryption, no public,\nprod retention floor")
         evidence = S3("S3 evidence zone\nObject Lock + versioned")
         tiers = Organizations("per tier:\nsandbox / dev / test / prod\n(workspace or account)")
         tf >> Edge(label="plan (json)") >> gate
+        infracost >> Edge(label="monthly $\nestimate") >> gate
         gate >> Edge(label="apply +\ncapture plan", style="bold") >> evidence
         gate >> Edge(label="promoted\nper tier", style="dashed", color="darkblue") >> tiers
 
@@ -62,6 +66,16 @@ with Diagram(
         athena = Athena("Athena\n(Redshift stand-in)")
         raw >> glue >> curated >> athena
 
+    # --- FinOps loop: after apply, close the loop the gate cannot ---
+    with Cluster("FinOps loop  (after apply, scoped by cost_center; free)"):
+        budgets = Budgets("AWS Budgets\n80% actual / 100% forecast")
+        anomaly = CostExplorer("Cost Anomaly\nDetection")
+
+    # --- Adoption backstop: detect pipelines built OUTSIDE the module ---
+    with Cluster("Adoption backstop  (detective)"):
+        offmodule = General("ClickOps /\noff-module resource")
+        config = Config("AWS Config\nREQUIRED_TAGS:\nmanaged_by=pipeline-module")
+
     # --- Wiring (governance edges unconstrained so they route cleanly) ---
     kms >> Edge(label="SSE-KMS\nevery zone", style="dashed", color="darkgreen",
                 constraint="false") >> raw
@@ -69,3 +83,12 @@ with Diagram(
     reader >> Edge(label="allowed", color="darkgreen", constraint="false") >> raw
     reader >> Edge(label="DENIED (IAM)", color="firebrick", style="bold",
                    constraint="false") >> curated
+
+    # FinOps loop watches the tier's tagged spend and pages the owner.
+    glue >> Edge(label="tagged spend", style="dashed", color="darkorange",
+                 constraint="false") >> budgets
+    glue >> Edge(style="dashed", color="darkorange", constraint="false") >> anomaly
+
+    # The Config rule catches anything missing the module signature tag.
+    offmodule >> Edge(label="NON_COMPLIANT", color="firebrick", style="bold",
+                      constraint="false") >> config

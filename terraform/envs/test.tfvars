@@ -5,3 +5,4 @@ environment             = "test"
 cost_center             = "platform-lab-test"
 glue_max_dpus           = 2
 evidence_retention_days = 7
+monthly_budget          = 25

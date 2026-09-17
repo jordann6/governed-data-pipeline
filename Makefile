@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: init ws plan gate deploy demo verify evidence destroy
+.PHONY: init ws plan gate deploy demo verify evidence showback destroy
 
 TF := terraform -chdir=terraform
 PY := python3
@@ -22,10 +22,22 @@ plan: ws
 	$(TF) plan $(VAR_FILE) -out=tfplan
 	$(TF) show -json tfplan > tfplan.json
 
-# Local mirror of the CI gate. Same rules block cost (DPU cap, tags) AND security
-# (encryption at rest, no public access). Requires infracost and conftest installed.
+# Local mirror of the CI gate. Same rules block cost (DPU cap, tags, and now a
+# per-tier DOLLAR budget) AND security (encryption at rest, no public access).
+# The plan-shaped rules run against tfplan.json; the budget rule runs against the
+# Infracost breakdown, with the tier passed in as data.env so env_budget applies.
+# Requires conftest; infracost is optional and the budget step skips cleanly if
+# it is not installed, exactly as before.
 gate: plan
-	infracost breakdown --path terraform || true
+	@if command -v infracost >/dev/null 2>&1; then \
+	  echo "== Infracost: estimating monthly cost + enforcing the $(ENV) budget =="; \
+	  infracost breakdown --path terraform --format json --out-file infracost.json; \
+	  echo '{"env":"$(ENV)"}' > budget_env.json; \
+	  conftest test infracost.json --policy policy --data budget_env.json \
+	    || (echo "COST/BUDGET GATE FAILED"; exit 1); \
+	else \
+	  echo "infracost not installed, skipping the dollar-budget gate (DPU cap still enforced below)"; \
+	fi
 	conftest test tfplan.json --policy policy || (echo "POLICY GATE FAILED"; exit 1)
 
 deploy: ws
@@ -77,6 +89,24 @@ verify: ws
 	      aws s3 cp "s3://$$CURATED/curated/canary.txt" /tmp/vpl-cur-out.txt >/dev/null 2>&1; then \
 	   echo "  FAIL: reader read curated, least privilege NOT enforced"; exit 1; \
 	 else echo "  PASS: reader DENIED on curated (AccessDenied)"; fi
+
+# Showback: prove attribution is not just a required tag but a usable ledger.
+# Pulls month-to-date spend from Cost Explorer grouped by the cost_center tag, so
+# every dollar maps to an owner. This is the "team that practices FinOps" beat:
+# the same tag the gate enforces is the axis the bill is sliced on. (Cost
+# allocation tags must be activated once in Billing; near-zero numbers are
+# expected on this lab.)
+showback:
+	@START=$$(date -u -v1d +%Y-%m-%d 2>/dev/null || date -u +%Y-%m-01); \
+	 END=$$(date -u +%Y-%m-%d); \
+	 echo "== Month-to-date spend by cost_center ($$START -> $$END) =="; \
+	 aws ce get-cost-and-usage \
+	   --time-period Start=$$START,End=$$END \
+	   --granularity MONTHLY --metrics UnblendedCost \
+	   --group-by Type=TAG,Key=cost_center \
+	   --query 'ResultsByTime[0].Groups[].[Keys[0],Metrics.UnblendedCost.Amount]' \
+	   --output table 2>/dev/null \
+	   || echo "  (activate the cost_center cost-allocation tag in Billing to populate this)"
 
 destroy: ws
 	$(PY) scripts/purge_evidence.py $$($(TF) output -raw evidence_bucket 2>/dev/null) || true
